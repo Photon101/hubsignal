@@ -1,5 +1,7 @@
 # hubsignal
 
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23ea4aaa)](https://github.com/sponsors/Photon101)
+
 Find promising open-source work on GitHub.
 
 `hubsignal` is a small CLI that searches open GitHub issues and ranks them with simple, inspectable signals:
