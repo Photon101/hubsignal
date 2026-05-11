@@ -272,6 +272,12 @@ def rank_issues(
     )
 
 
+def _format_labels(labels: tuple[str, ...]) -> str:
+    if not labels:
+        return ""
+    return " ".join(f"`{label}`" for label in sorted(labels))
+
+
 def emit_text(result: RankResult) -> None:
     print(f"{'score':>6}  {'stars':>7}  {'repo':<32}  issue")
     for issue in result.issues:
@@ -281,6 +287,26 @@ def emit_text(result: RankResult) -> None:
     skipped = {key: value for key, value in result.skipped.items() if value}
     if skipped:
         print(f"\nskipped: {json.dumps(skipped, sort_keys=True)}")
+
+
+def emit_markdown(result: RankResult) -> None:
+    print("# hubsignal scan results\n")
+    for i, issue in enumerate(result.issues, 1):
+        labels = _format_labels(issue.labels)
+        print(f"### {i}. [{issue.title}]({issue.url})")
+        print(f"- **Repository:** `{issue.repo}`")
+        print(f"- **Stars:** {issue.stars}")
+        print(f"- **Comments:** {issue.comments}")
+        if labels:
+            print(f"- **Labels:** {labels}")
+        print()
+    skipped = {key: value for key, value in result.skipped.items() if value}
+    if skipped:
+        print("---\n")
+        print("### Skipped\n")
+        for key, count in sorted(skipped.items()):
+            print(f"- {key}: {count}")
+        print()
 
 
 def emit_json(result: RankResult) -> None:
@@ -342,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=("text", "json"),
+        choices=("text", "json", "markdown"),
         default="text",
         help="Output format.",
     )
@@ -389,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.format == "json":
         emit_json(result)
+    elif args.format == "markdown":
+        emit_markdown(result)
     else:
         emit_text(result)
     return 0
