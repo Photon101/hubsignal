@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -16,6 +17,19 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 DEFAULT_QUERY = 'is:issue is:open label:"help wanted"'
+BOUNTY_LIKE_PATTERNS = (
+    "bounty",
+    "earn",
+    "reward",
+    "token",
+    "airdrop",
+    "star +",
+    "stars",
+    "upvote",
+    "reaction",
+    "review an open pr",
+    "google search console",
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +54,12 @@ class RankedIssue:
     archived: bool
     fork: bool
     pushed_at: str | None
+
+
+@dataclass(frozen=True)
+class RankResult:
+    issues: list[RankedIssue]
+    skipped: dict[str, int]
 
 
 def gh_token() -> str | None:
@@ -140,6 +160,25 @@ def score_issue(item: dict[str, Any], stars: int) -> float:
     return round(score, 2)
 
 
+def normalized_labels(item: dict[str, Any]) -> set[str]:
+    return {label["name"].lower() for label in item.get("labels", [])}
+
+
+def is_bounty_like(item: dict[str, Any]) -> bool:
+    labels = normalized_labels(item)
+    if any("bounty" in label for label in labels):
+        return True
+
+    text = " ".join(
+        [
+            str(item.get("title") or ""),
+            str(item.get("body") or ""),
+            " ".join(labels),
+        ]
+    ).lower()
+    return any(pattern in text for pattern in BOUNTY_LIKE_PATTERNS)
+
+
 def parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -176,11 +215,32 @@ def rank_issues(
     exclude_archived: bool = False,
     exclude_forks: bool = False,
     pushed_after: str | None = None,
-) -> list[RankedIssue]:
+    exclude_repos: set[str] | None = None,
+    exclude_title_regex: str | None = None,
+    exclude_bounty_like: bool = False,
+) -> RankResult:
     repo_cache: dict[str, RepoDetails] = {}
     ranked = []
+    skipped = {
+        "repository": 0,
+        "title": 0,
+        "bounty_like": 0,
+    }
+    excluded = {repo.lower() for repo in exclude_repos or set()}
+    title_re = re.compile(exclude_title_regex, re.IGNORECASE) if exclude_title_regex else None
+
     for item in items:
         repo = repo_from_url(item["repository_url"])
+        if repo.lower() in excluded:
+            skipped["repository"] += 1
+            continue
+        if title_re and title_re.search(str(item.get("title") or "")):
+            skipped["title"] += 1
+            continue
+        if exclude_bounty_like and is_bounty_like(item):
+            skipped["bounty_like"] += 1
+            continue
+
         details = repo_details(repo, token, repo_cache)
         if not repo_passes_filters(
             details,
@@ -206,19 +266,33 @@ def rank_issues(
                 pushed_at=details.pushed_at,
             )
         )
-    return sorted(ranked, key=lambda issue: issue.score, reverse=True)
+    return RankResult(
+        issues=sorted(ranked, key=lambda issue: issue.score, reverse=True),
+        skipped=skipped,
+    )
 
 
-def emit_text(issues: list[RankedIssue]) -> None:
+def emit_text(result: RankResult) -> None:
     print(f"{'score':>6}  {'stars':>7}  {'repo':<32}  issue")
-    for issue in issues:
+    for issue in result.issues:
         repo = issue.repo[:32]
         print(f"{issue.score:>6.1f}  {issue.stars:>7}  {repo:<32}  {issue.title}")
         print(f"{'':>6}  {'':>7}  {'':<32}  {issue.url}")
+    skipped = {key: value for key, value in result.skipped.items() if value}
+    if skipped:
+        print(f"\nskipped: {json.dumps(skipped, sort_keys=True)}")
 
 
-def emit_json(issues: list[RankedIssue]) -> None:
-    print(json.dumps([issue.__dict__ for issue in issues], indent=2))
+def emit_json(result: RankResult) -> None:
+    print(
+        json.dumps(
+            {
+                "issues": [issue.__dict__ for issue in result.issues],
+                "skipped": result.skipped,
+            },
+            indent=2,
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -251,6 +325,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Drop issues from repositories with no push after this date.",
     )
     parser.add_argument(
+        "--exclude-repo",
+        action="append",
+        default=[],
+        metavar="OWNER/NAME",
+        help="Drop issues from this repository. Can be repeated.",
+    )
+    parser.add_argument(
+        "--exclude-title-regex",
+        help="Drop issues whose title matches this Python regular expression.",
+    )
+    parser.add_argument(
+        "--exclude-bounty-like",
+        action="store_true",
+        help="Drop issues that look like bounties, token rewards, or promotion tasks.",
+    )
+    parser.add_argument(
         "--format",
         choices=("text", "json"),
         default="text",
@@ -273,25 +363,34 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             print("--pushed-after must use YYYY-MM-DD", file=sys.stderr)
             return 2
+    if args.exclude_title_regex:
+        try:
+            re.compile(args.exclude_title_regex)
+        except re.error as exc:
+            print(f"--exclude-title-regex is invalid: {exc}", file=sys.stderr)
+            return 2
 
     token = gh_token()
     try:
-        issues = rank_issues(
+        result = rank_issues(
             search_issues(args.query, args.limit, token),
             token,
             min_stars=args.min_stars,
             exclude_archived=args.exclude_archived,
             exclude_forks=args.exclude_forks,
             pushed_after=args.pushed_after,
+            exclude_repos=set(args.exclude_repo),
+            exclude_title_regex=args.exclude_title_regex,
+            exclude_bounty_like=args.exclude_bounty_like,
         )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
     if args.format == "json":
-        emit_json(issues)
+        emit_json(result)
     else:
-        emit_text(issues)
+        emit_text(result)
     return 0
 
 

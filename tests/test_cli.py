@@ -1,6 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
-from hubsignal.cli import RepoDetails, repo_passes_filters, repo_from_url, score_issue
+from hubsignal.cli import (
+    RepoDetails,
+    is_bounty_like,
+    rank_issues,
+    repo_passes_filters,
+    repo_from_url,
+    score_issue,
+)
 
 
 def test_repo_from_url_extracts_owner_and_name():
@@ -59,3 +66,67 @@ def test_repo_filters_can_exclude_archived_and_forked_repos():
     assert repo_passes_filters(details, 10, False, False, None)
     assert not repo_passes_filters(details, 10, True, False, None)
     assert not repo_passes_filters(details, 10, False, True, None)
+
+
+def test_bounty_like_detection_checks_labels_title_and_body():
+    assert is_bounty_like(
+        {
+            "title": "Find a typo",
+            "body": "Earn tokens for a quick task",
+            "labels": [{"name": "good first issue"}],
+        }
+    )
+    assert is_bounty_like(
+        {
+            "title": "Add a dashboard",
+            "body": "",
+            "labels": [{"name": "bounty"}],
+        }
+    )
+    assert not is_bounty_like(
+        {
+            "title": "Document CLI behavior",
+            "body": "Small docs-only fix",
+            "labels": [{"name": "documentation"}],
+        }
+    )
+
+
+def test_rank_issues_reports_skipped_noise_without_fetching_repo_details(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/noisy/project",
+            "title": "Bounty: star + review an open PR",
+            "body": "",
+            "labels": [{"name": "good first issue"}],
+            "comments": 0,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "html_url": "https://github.com/noisy/project/issues/1",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/owner/project",
+            "title": "Document CLI behavior",
+            "body": "",
+            "labels": [{"name": "documentation"}],
+            "comments": 1,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "html_url": "https://github.com/owner/project/issues/2",
+        },
+    ]
+
+    def fake_repo_details(repo, token, cache):
+        return RepoDetails(
+            name=repo,
+            stars=100,
+            archived=False,
+            fork=False,
+            pushed_at="2026-05-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr("hubsignal.cli.repo_details", fake_repo_details)
+
+    result = rank_issues(items, token=None, exclude_bounty_like=True)
+
+    assert len(result.issues) == 1
+    assert result.issues[0].repo == "owner/project"
+    assert result.skipped["bounty_like"] == 1

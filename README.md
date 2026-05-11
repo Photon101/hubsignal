@@ -44,6 +44,7 @@ gh auth login
 ```bash
 hubsignal --query 'is:issue is:open label:"help wanted" language:Python' --limit 20
 hubsignal --query 'is:issue is:open label:"good first issue" language:Go' --min-stars 100 --exclude-archived --exclude-forks --pushed-after 2026-01-01
+hubsignal --query 'is:issue is:open label:"good first issue" language:Python' --exclude-bounty-like --exclude-repo noisy/project
 hubsignal --query 'is:issue is:open "good first issue" "agent"' --format json
 ```
 
