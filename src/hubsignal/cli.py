@@ -218,6 +218,7 @@ def rank_issues(
     exclude_repos: set[str] | None = None,
     exclude_title_regex: str | None = None,
     exclude_bounty_like: bool = False,
+    bounty_only: bool = False,
 ) -> RankResult:
     repo_cache: dict[str, RepoDetails] = {}
     ranked = []
@@ -225,6 +226,7 @@ def rank_issues(
         "repository": 0,
         "title": 0,
         "bounty_like": 0,
+        "non_bounty": 0,
     }
     excluded = {repo.lower() for repo in exclude_repos or set()}
     title_re = re.compile(exclude_title_regex, re.IGNORECASE) if exclude_title_regex else None
@@ -237,7 +239,11 @@ def rank_issues(
         if title_re and title_re.search(str(item.get("title") or "")):
             skipped["title"] += 1
             continue
-        if exclude_bounty_like and is_bounty_like(item):
+        if bounty_only:
+            if not is_bounty_like(item):
+                skipped["non_bounty"] += 1
+                continue
+        elif exclude_bounty_like and is_bounty_like(item):
             skipped["bounty_like"] += 1
             continue
 
@@ -367,6 +373,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Drop issues that look like bounties, token rewards, or promotion tasks.",
     )
     parser.add_argument(
+        "--bounty-only",
+        action="store_true",
+        help="Only show issues that look like bounties or paid work.",
+    )
+    parser.add_argument(
         "--format",
         choices=("text", "json", "markdown"),
         default="text",
@@ -408,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
             exclude_repos=set(args.exclude_repo),
             exclude_title_regex=args.exclude_title_regex,
             exclude_bounty_like=args.exclude_bounty_like,
+            bounty_only=args.bounty_only,
         )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

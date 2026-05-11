@@ -130,3 +130,43 @@ def test_rank_issues_reports_skipped_noise_without_fetching_repo_details(monkeyp
     assert len(result.issues) == 1
     assert result.issues[0].repo == "owner/project"
     assert result.skipped["bounty_like"] == 1
+
+
+def test_rank_issues_bounty_only_filters_non_bounties(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/noisy/project",
+            "title": "Bounty: star + review an open PR",
+            "body": "",
+            "labels": [{"name": "good first issue"}],
+            "comments": 0,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "html_url": "https://github.com/noisy/project/issues/1",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/owner/project",
+            "title": "Document CLI behavior",
+            "body": "",
+            "labels": [{"name": "documentation"}],
+            "comments": 1,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "html_url": "https://github.com/owner/project/issues/2",
+        },
+    ]
+
+    def fake_repo_details(repo, token, cache):
+        return RepoDetails(
+            name=repo,
+            stars=100,
+            archived=False,
+            fork=False,
+            pushed_at="2026-05-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr("hubsignal.cli.repo_details", fake_repo_details)
+
+    result = rank_issues(items, token=None, bounty_only=True)
+
+    assert len(result.issues) == 1
+    assert result.issues[0].repo == "noisy/project"
+    assert result.skipped["non_bounty"] == 1
