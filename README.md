@@ -11,7 +11,7 @@ Find promising open-source work on GitHub.
 - freshness
 - discussion volume
 
-The goal is not to predict value perfectly. The goal is to reduce the first hour of manual scanning into a short, reviewable list.
+Reduce the first hour of manual scanning into a short, reviewable list.
 
 ## Install
 
