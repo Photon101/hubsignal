@@ -19,6 +19,15 @@ DEFAULT_QUERY = 'is:issue is:open label:"help wanted"'
 
 
 @dataclass(frozen=True)
+class RepoDetails:
+    name: str
+    stars: int
+    archived: bool
+    fork: bool
+    pushed_at: str | None
+
+
+@dataclass(frozen=True)
 class RankedIssue:
     score: float
     repo: str
@@ -28,6 +37,9 @@ class RankedIssue:
     comments: int
     updated_at: str
     stars: int
+    archived: bool
+    fork: bool
+    pushed_at: str | None
 
 
 def gh_token() -> str | None:
@@ -88,10 +100,16 @@ def repo_from_url(repository_url: str) -> str:
     return repository_url[len(prefix) :]
 
 
-def repo_stars(repo: str, token: str | None, cache: dict[str, int]) -> int:
+def repo_details(repo: str, token: str | None, cache: dict[str, RepoDetails]) -> RepoDetails:
     if repo not in cache:
         data = github_get(f"/repos/{repo}", token)
-        cache[repo] = int(data.get("stargazers_count") or 0)
+        cache[repo] = RepoDetails(
+            name=repo,
+            stars=int(data.get("stargazers_count") or 0),
+            archived=bool(data.get("archived")),
+            fork=bool(data.get("fork")),
+            pushed_at=data.get("pushed_at"),
+        )
     return cache[repo]
 
 
@@ -122,23 +140,70 @@ def score_issue(item: dict[str, Any], stars: int) -> float:
     return round(score, 2)
 
 
-def rank_issues(items: list[dict[str, Any]], token: str | None) -> list[RankedIssue]:
-    star_cache: dict[str, int] = {}
+def parse_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    if len(value) == 10:
+        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def repo_passes_filters(
+    details: RepoDetails,
+    min_stars: int,
+    exclude_archived: bool,
+    exclude_forks: bool,
+    pushed_after: str | None,
+) -> bool:
+    if details.stars < min_stars:
+        return False
+    if exclude_archived and details.archived:
+        return False
+    if exclude_forks and details.fork:
+        return False
+    if pushed_after:
+        pushed_at = parse_date(details.pushed_at)
+        cutoff = parse_date(pushed_after)
+        if pushed_at is None or cutoff is None or pushed_at < cutoff:
+            return False
+    return True
+
+
+def rank_issues(
+    items: list[dict[str, Any]],
+    token: str | None,
+    min_stars: int = 0,
+    exclude_archived: bool = False,
+    exclude_forks: bool = False,
+    pushed_after: str | None = None,
+) -> list[RankedIssue]:
+    repo_cache: dict[str, RepoDetails] = {}
     ranked = []
     for item in items:
         repo = repo_from_url(item["repository_url"])
-        stars = repo_stars(repo, token, star_cache)
+        details = repo_details(repo, token, repo_cache)
+        if not repo_passes_filters(
+            details,
+            min_stars=min_stars,
+            exclude_archived=exclude_archived,
+            exclude_forks=exclude_forks,
+            pushed_after=pushed_after,
+        ):
+            continue
         labels = tuple(label["name"] for label in item.get("labels", []))
         ranked.append(
             RankedIssue(
-                score=score_issue(item, stars),
+                score=score_issue(item, details.stars),
                 repo=repo,
                 title=item["title"],
                 url=item["html_url"],
                 labels=labels,
                 comments=int(item.get("comments") or 0),
                 updated_at=item["updated_at"],
-                stars=stars,
+                stars=details.stars,
+                archived=details.archived,
+                fork=details.fork,
+                pushed_at=details.pushed_at,
             )
         )
     return sorted(ranked, key=lambda issue: issue.score, reverse=True)
@@ -165,6 +230,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=20, help="Number of issues to inspect.")
     parser.add_argument(
+        "--min-stars",
+        type=int,
+        default=0,
+        help="Drop issues from repositories below this star count.",
+    )
+    parser.add_argument(
+        "--exclude-archived",
+        action="store_true",
+        help="Drop issues from archived repositories.",
+    )
+    parser.add_argument(
+        "--exclude-forks",
+        action="store_true",
+        help="Drop issues from fork repositories.",
+    )
+    parser.add_argument(
+        "--pushed-after",
+        metavar="YYYY-MM-DD",
+        help="Drop issues from repositories with no push after this date.",
+    )
+    parser.add_argument(
         "--format",
         choices=("text", "json"),
         default="text",
@@ -178,10 +264,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit < 1 or args.limit > 100:
         print("--limit must be between 1 and 100", file=sys.stderr)
         return 2
+    if args.min_stars < 0:
+        print("--min-stars must be non-negative", file=sys.stderr)
+        return 2
+    if args.pushed_after:
+        try:
+            parse_date(args.pushed_after)
+        except ValueError:
+            print("--pushed-after must use YYYY-MM-DD", file=sys.stderr)
+            return 2
 
     token = gh_token()
     try:
-        issues = rank_issues(search_issues(args.query, args.limit, token), token)
+        issues = rank_issues(
+            search_issues(args.query, args.limit, token),
+            token,
+            min_stars=args.min_stars,
+            exclude_archived=args.exclude_archived,
+            exclude_forks=args.exclude_forks,
+            pushed_after=args.pushed_after,
+        )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -195,4 +297,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
