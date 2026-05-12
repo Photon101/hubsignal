@@ -7,8 +7,7 @@
 
 **Find promising open-source work on GitHub — in seconds, not hours.**
 
-`hubsignal` is a zero-dependency CLI that scans GitHub issues and ranks them by signal strength. Stars, labels, freshness, and discussion activity all factor into a simple, inspectable score. No AI, no magic — just fast filtering of the GitHub issue firehose.
-
+`hubsignal` is a zero-dependency CLI that scans GitHub issues and ranks them by signal strength. Stars, labels, freshness, and discussion activity all factor into a simple, inspectable score.
 ## Quick Start
 
 ```bash
